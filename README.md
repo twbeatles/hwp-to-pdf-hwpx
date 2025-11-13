@@ -291,7 +291,7 @@ hwp-converter/
 ## 📧 문의 및 지원
 
 - **이슈 트래커**: [GitHub Issues](https://github.com/yourusername/hwp-converter/issues)
-- **이메일**: your.email@example.com
+
 
 ## 📜 라이선스
 
