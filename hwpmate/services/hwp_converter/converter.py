@@ -26,7 +26,11 @@ from ..hwp_security_module import (
     SECURITY_MODULE_ALIAS,
     ensure_hwp_security_module,
 )
-from .artifact_snapshot import _changed_artifacts, _snapshot_artifacts
+from .artifact_snapshot import (
+    _changed_artifacts,
+    _snapshot_artifacts,
+    remove_new_attempt_artifacts,
+)
 from .com_types import HwpAutomation, is_com_failure_result, pythoncom, require_pywin32
 from .process_snapshot import _snapshot_hwp_pids, get_snapshot_health
 
@@ -337,6 +341,19 @@ class HWPConverter:
 
             save_error = None
             before_artifacts = _snapshot_artifacts(output_file, format_type)
+
+            def _cleanup_failed_artifacts() -> None:
+                removed, cleanup_warnings = remove_new_attempt_artifacts(
+                    before_artifacts, output_file, format_type
+                )
+                if removed:
+                    logger.warning(
+                        "실패한 변환 산출물 정리: %s",
+                        ", ".join(str(path) for path in removed),
+                    )
+                for warning in cleanup_warnings:
+                    logger.warning(warning)
+
             exported = False
             pdf_mode = normalize_pdf_export_mode(self.pdf_export_mode)
 
@@ -432,6 +449,7 @@ class HWPConverter:
                     pass
                 if _cancelled():
                     return False, "사용자 취소"
+                _cleanup_failed_artifacts()
                 return False, save_error or "내보내기 실패"
 
             def _artifact_ok() -> Tuple[bool, Optional[str], list[Path], Any]:
@@ -472,6 +490,7 @@ class HWPConverter:
                         pass
                     if _cancelled():
                         return False, "사용자 취소"
+                    _cleanup_failed_artifacts()
                     return False, artifact_error
 
             # PDF: SaveAs 경로도 %PDF 매직 검증. 실패 시 아직 안 쓴 폴백 경로 1회 시도.
@@ -513,6 +532,7 @@ class HWPConverter:
                             pass
                         if _cancelled():
                             return False, "사용자 취소"
+                        _cleanup_failed_artifacts()
                         return False, (
                             artifact_error
                             or f"유효한 PDF가 아닙니다 (매직/크기 검사 실패): {pdf_check.name}"

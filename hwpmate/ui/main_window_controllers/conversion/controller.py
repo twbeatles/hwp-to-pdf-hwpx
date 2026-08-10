@@ -203,6 +203,7 @@ class ConversionController:
             include_sub=self.window.include_sub_check.isChecked(),
             same_location=self.window.same_location_check.isChecked(),
             output_path=self.window.output_entry.text(),
+            overwrite=self.window.overwrite_check.isChecked(),
             file_paths=self.window.file_store.paths,
             backup_enabled=self.window.backup_check.isChecked(),
             retry_count=self.window.retry_spin.value(),
@@ -226,16 +227,7 @@ class ConversionController:
         if not folder:
             raise ValueError("폴더를 선택하세요.")
 
-        cache = self.window.file_selection_controller.get_folder_scan_cache(
-            folder_path=folder,
-            include_sub=self.window.include_sub_check.isChecked(),
-            max_age_seconds=FOLDER_SCAN_CACHE_CONVERT_MAX_AGE_SECONDS,
-        )
-        if cache is not None:
-            return
-
-        # 오래되었거나 없음 → 재스캔
-        self.window.file_selection_controller.invalidate_folder_scan_cache()
+        # 변환 직전에는 항상 비동기 최신 스캔을 수행한다.
         scan_worker = self.state.scan_worker
         scan_running = bool(
             scan_worker
@@ -244,7 +236,9 @@ class ConversionController:
         )
         if not scan_running:
             self.window.status_label.setText("폴더 스캔 시작 중 (변환 직전 최신화)...")
-            self.window.file_selection_controller.start_folder_preview_scan(folder)
+            if not self.window.file_selection_controller.refresh_folder_scan_for_conversion(folder):
+                self._abort_if_close_requested()
+                raise ValueError("폴더 스캔이 아직 종료되지 않았습니다. 잠시 후 다시 시도하세요.")
             QApplication.processEvents()
 
         self.window.status_label.setText("폴더 스캔 완료 대기 중...")
@@ -293,6 +287,9 @@ class ConversionController:
         engine_status = getattr(worker, "engine_status_updated", None)
         if engine_status is not None:
             engine_status.connect(self.on_engine_status_updated)
+        stage_updated = getattr(worker, "stage_updated", None)
+        if stage_updated is not None:
+            stage_updated.connect(self.on_stage_updated)
         worker.start()
         self.window.hwp_status_label.setText("🟡 한글 연결 중... (허용 창 확인)")
         self._start_hwp_foreground_polling()
@@ -300,6 +297,9 @@ class ConversionController:
             # 시작 메시지에 허용 창 힌트를 합쳐 토스트 스택을 아끼고 가독성을 유지
             combined = f"{toast_message}\n{HWP_PERMISSION_HINT}"
             self.window.toast.show_message(combined, toast_icon)
+
+    def on_stage_updated(self, stage: str, elapsed_seconds: float) -> None:
+        self.window.status_label.setText(f"변환 단계: {stage} ({elapsed_seconds:.1f}초)")
 
     def _confirm_preflight_and_start_worker(
         self,
@@ -679,6 +679,7 @@ class ConversionController:
             format_type=format_type,
             same_location=self.window.same_location_check.isChecked(),
             output_path=self.window.output_entry.text().strip(),
+            overwrite=self.window.overwrite_check.isChecked(),
             backup_enabled=self.window.backup_check.isChecked(),
             retry_count=self.window.retry_spin.value(),
             backup_max_files_per_stem=self._backup_max_files_from_ui(),
@@ -729,6 +730,9 @@ class ConversionController:
                 engine_status = getattr(self.state.worker, "engine_status_updated", None)
                 if engine_status is not None:
                     engine_status.disconnect()
+                stage_updated = getattr(self.state.worker, "stage_updated", None)
+                if stage_updated is not None:
+                    stage_updated.disconnect()
             except (TypeError, RuntimeError):
                 pass
 
@@ -736,4 +740,3 @@ class ConversionController:
         self.state.plan = None
         if self.state.close_after_worker:
             QTimer.singleShot(0, self.window.close)
-

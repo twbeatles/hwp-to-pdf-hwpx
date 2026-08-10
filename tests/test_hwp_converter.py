@@ -12,12 +12,14 @@ class FakeHwp:
         open_result: bool | int = True,
         save_results=None,
         write_output: bool = True,
+        write_output_on_failure: bool = False,
         output_content: bytes = b"%PDF-1.4\n",
         aux_suffix: str | None = None,
     ) -> None:
         self.open_result = open_result
         self.save_results = list(save_results or [True])
         self.write_output = write_output
+        self.write_output_on_failure = write_output_on_failure
         self.output_content = output_content
         self.aux_suffix = aux_suffix
         self.save_calls: list[tuple[str, str, str | None]] = []
@@ -36,7 +38,7 @@ class FakeHwp:
     def SaveAs(self, path: str, format_name: str, options: str | None = None):
         self.save_calls.append((path, format_name, options))
         result = self.save_results.pop(0) if self.save_results else True
-        if result is True and self.write_output:
+        if (result is True or self.write_output_on_failure) and self.write_output:
             Path(path).write_bytes(self.output_content)
         if result is True and self.aux_suffix:
             output = Path(path)
@@ -471,6 +473,32 @@ def test_convert_file_fails_when_output_file_is_empty(tmp_path: Path) -> None:
 
     assert success is False
     assert error is not None and "비어 있습니다" in error
+
+
+def test_convert_file_removes_new_docx_artifact_when_saveas_fails(tmp_path: Path) -> None:
+    source = tmp_path / "a.hwp"
+    source.write_text("x", encoding="utf-8")
+    output = tmp_path / "a.docx"
+    fake = FakeHwp(save_results=[False, False, False, False], write_output_on_failure=True)
+
+    success, error = build_converter(fake).convert_file(source, output, "DOCX")
+
+    assert success is False
+    assert error is not None
+    assert not output.exists()
+
+
+def test_convert_file_preserves_existing_docx_when_failed_export_does_not_change_it(tmp_path: Path) -> None:
+    source = tmp_path / "a.hwp"
+    source.write_text("x", encoding="utf-8")
+    output = tmp_path / "a.docx"
+    output.write_bytes(b"existing")
+    fake = FakeHwp(save_results=[False, False], write_output=False)
+
+    success, _ = build_converter(fake).convert_file(source, output, "DOCX")
+
+    assert success is False
+    assert output.read_bytes() == b"existing"
 
 
 def test_convert_file_accepts_auxiliary_image_artifact(tmp_path: Path) -> None:

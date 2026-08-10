@@ -32,6 +32,7 @@ class TaskPlanner:
         include_sub: bool,
         same_location: bool,
         output_path: str,
+        overwrite: bool = False,
         file_paths: Sequence[str],
         backup_enabled: bool = True,
         retry_count: int = 1,
@@ -127,6 +128,7 @@ class TaskPlanner:
                 format_type=format_type,
                 same_location=same_location,
                 output_path=output_path.strip(),
+                overwrite=overwrite,
                 backup_enabled=backup_enabled,
                 retry_count=retry_count,
                 backup_max_files_per_stem=backup_max_files_per_stem,
@@ -175,6 +177,7 @@ class TaskPlanner:
             format_type=format_type,
             same_location=same_location,
             output_path=output_path.strip(),
+            overwrite=overwrite,
             backup_enabled=backup_enabled,
             retry_count=retry_count,
             backup_max_files_per_stem=backup_max_files_per_stem,
@@ -194,48 +197,70 @@ class TaskPlanner:
         renamed_count = 0
 
         for task in tasks:
-            original_path = task.output_file
-            batch_duplicate = artifact_key(original_path) in used_path_keys
-
-            existing_conflict = (not overwrite) and self._has_existing_output_conflict(task.output_file, format_type)
-            if batch_duplicate or existing_conflict:
-                counter = 1
-                stem = original_path.stem
-                ext = original_path.suffix
-                parent = original_path.parent
-
-                while counter <= MAX_FILENAME_COUNTER:
-                    new_name = f"{stem} ({counter}){ext}"
-                    new_path = parent / new_name
-                    exists_conflict = (not overwrite) and self._has_existing_output_conflict(new_path, format_type)
-                    batch_conflict = artifact_key(new_path) in used_path_keys
-                    if (not exists_conflict) and (not batch_conflict):
-                        task.output_file = new_path
-                        break
-                    counter += 1
-                else:
-                    fallback_counter = 1
-                    while True:
-                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        suffix = "" if fallback_counter == 1 else f"_{fallback_counter}"
-                        new_name = f"{stem}_{timestamp}{suffix}{ext}"
-                        new_path = parent / new_name
-                        exists_conflict = (not overwrite) and self._has_existing_output_conflict(new_path, format_type)
-                        batch_conflict = artifact_key(new_path) in used_path_keys
-                        if (not exists_conflict) and (not batch_conflict):
-                            task.output_file = new_path
-                            logger.warning(f"파일명 카운터 초과, 타임스탬프 사용: {new_name}")
-                            break
-                        fallback_counter += 1
-
-                if task.output_file != original_path:
-                    task.conflict_original_output_file = original_path
-                    renamed_count += 1
-                    logger.info(f"출력 경로 조정: {original_path} -> {task.output_file}")
-
-            used_path_keys.add(artifact_key(task.output_file))
+            if self.allocate_output_path(
+                task,
+                used_path_keys=used_path_keys,
+                overwrite=overwrite,
+                format_type=format_type,
+            ):
+                renamed_count += 1
 
         return renamed_count
+
+    def allocate_output_path(
+        self,
+        task: ConversionTask,
+        *,
+        used_path_keys: set[str],
+        overwrite: bool,
+        format_type: str | None,
+    ) -> bool:
+        """Allocate a collision-free output path and return whether it changed."""
+        original_path = task.output_file
+        batch_duplicate = artifact_key(original_path) in used_path_keys
+        existing_conflict = (not overwrite) and self._has_existing_output_conflict(
+            original_path, format_type
+        )
+        if not (batch_duplicate or existing_conflict):
+            used_path_keys.add(artifact_key(task.output_file))
+            return False
+
+        counter = 1
+        stem = original_path.stem
+        ext = original_path.suffix
+        parent = original_path.parent
+        while counter <= MAX_FILENAME_COUNTER:
+            new_name = f"{stem} ({counter}){ext}"
+            new_path = parent / new_name
+            exists_conflict = (not overwrite) and self._has_existing_output_conflict(
+                new_path, format_type
+            )
+            batch_conflict = artifact_key(new_path) in used_path_keys
+            if not exists_conflict and not batch_conflict:
+                task.output_file = new_path
+                break
+            counter += 1
+        else:
+            fallback_counter = 1
+            while True:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                suffix = "" if fallback_counter == 1 else f"_{fallback_counter}"
+                new_name = f"{stem}_{timestamp}{suffix}{ext}"
+                new_path = parent / new_name
+                exists_conflict = (not overwrite) and self._has_existing_output_conflict(
+                    new_path, format_type
+                )
+                batch_conflict = artifact_key(new_path) in used_path_keys
+                if not exists_conflict and not batch_conflict:
+                    task.output_file = new_path
+                    logger.warning(f"파일명 카운터 초과, 타임스탬프 사용: {new_name}")
+                    break
+                fallback_counter += 1
+
+        task.conflict_original_output_file = original_path
+        used_path_keys.add(artifact_key(task.output_file))
+        logger.info(f"출력 경로 조정: {original_path} -> {task.output_file}")
+        return True
 
     def _has_existing_output_conflict(self, output_file: Path, format_type: str | None) -> bool:
         if format_type is None:

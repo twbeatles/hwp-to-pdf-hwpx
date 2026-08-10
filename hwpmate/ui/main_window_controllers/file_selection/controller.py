@@ -99,8 +99,10 @@ class FileSelectionController:
         mode: str,
         include_sub: bool = True,
         allowed_exts: Iterable[str] | None = None,
+        *,
+        allow_while_planning: bool = False,
     ) -> None:
-        if self._input_locked():
+        if self._input_locked() and not (allow_while_planning and self.state.is_planning):
             return
 
         cleaned_inputs = [str(p).strip() for p in input_paths if str(p).strip()]
@@ -134,7 +136,7 @@ class FileSelectionController:
         self.state.scan_worker.finished.connect(self.window._on_scan_worker_finished)
         self.state.scan_worker.start()
 
-    def start_folder_preview_scan(self, folder_path: str) -> None:
+    def start_folder_preview_scan(self, folder_path: str, *, allow_while_planning: bool = False) -> None:
         self.window.status_label.setText("📂 폴더 스캔 중...")
         # 전체 지원 확장자를 캐시하고, 표시 카운트만 현재 형식 기준으로 계산한다.
         self.start_scan(
@@ -142,7 +144,14 @@ class FileSelectionController:
             mode="folder_preview",
             include_sub=self.window.include_sub_check.isChecked(),
             allowed_exts=set(SUPPORTED_EXTENSIONS),
+            allow_while_planning=allow_while_planning,
         )
+
+    def refresh_folder_scan_for_conversion(self, folder_path: str) -> bool:
+        """Refresh the folder cache without opening the normal input mutation path."""
+        self.invalidate_folder_scan_cache()
+        self.start_folder_preview_scan(folder_path, allow_while_planning=True)
+        return self.wait_for_active_scan(SCAN_CANCEL_WAIT_MS)
 
     def append_files_batch(self, files: list[str]) -> int:
         if not files:
@@ -566,4 +575,3 @@ class FileSelectionController:
         if hasattr(self.window, "toast"):
             self.window.toast.show_message(message, "⚠️")
         return True
-

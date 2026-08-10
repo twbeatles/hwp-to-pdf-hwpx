@@ -135,6 +135,7 @@ class PlannedConversion:
     format_type: str
     same_location: bool
     output_path: str
+    overwrite: bool = False
     backup_enabled: bool = True
     retry_count: int = 1
     backup_max_files_per_stem: int = 20

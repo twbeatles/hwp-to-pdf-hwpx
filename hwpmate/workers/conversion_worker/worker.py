@@ -11,6 +11,7 @@ from ...constants import MAX_RETRY_COUNT, RETRY_DELAY_SECONDS
 from ...models import ConversionSummary, ConversionTask, PlannedConversion
 from ...services.hwp_converter import HWPConverter, pythoncom
 from ...services.hwp_print_settings import normalize_pdf_export_mode
+from ...services.task_planner import TaskPlanner
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,7 @@ class ConversionWorker(QThread):
     progress_updated = pyqtSignal(int, int, str)  # current, total, filename
     status_updated = pyqtSignal(str)
     task_completed = pyqtSignal(object)  # ConversionSummary
+    stage_updated = pyqtSignal(str, float)
     # 보안 모듈 등록·소유 PID 등 UI 폴링 정책용 (initialize 직후)
     engine_status_updated = pyqtSignal(object)
 
@@ -53,6 +55,9 @@ class ConversionWorker(QThread):
         self.cancel_requested = False
         self.converter: Optional[ConverterEngine] = None
         self._converter_factory: Callable[[], ConverterEngine] = converter_factory or HWPConverter
+        self._task_planner = TaskPlanner()
+        self.current_stage = "대기"
+        self._started_at: float | None = None
 
     def cancel(self) -> None:
         """취소 요청"""
@@ -64,6 +69,8 @@ class ConversionWorker(QThread):
 
     def run(self) -> None:
         """변환 작업 수행"""
+        self._started_at = time.perf_counter()
+        self._set_stage("COM 초기화")
         if pythoncom is not None:
             try:
                 pythoncom.CoInitialize()
@@ -71,14 +78,16 @@ class ConversionWorker(QThread):
             except Exception as e:
                 logger.debug(f"Worker COM 초기화: {e}")
 
-        start_ts = time.perf_counter()
+        start_ts = self._started_at
         total = len(self.tasks)
         converter: ConverterEngine | None = None
         runtime_warnings: list[str] = []
+        used_output_path_keys: set[str] = set()
 
         try:
             converter = self._converter_factory()
             self.converter = converter
+            self._set_stage("한글 연결")
             self.status_updated.emit(
                 "한글 프로그램 연결 중... 허용/보안 창이 뜨면 작업 표시줄을 확인해 주세요."
             )
@@ -116,13 +125,27 @@ class ConversionWorker(QThread):
                 self.status_updated.emit(f"변환 중: {task.input_file.name}")
 
                 if self.backup_enabled:
+                    self._set_stage("백업 생성")
                     try:
                         task.backup_file = self._create_backup(task.input_file)
                     except Exception as e:
                         task.backup_error = str(e)
                         logger.warning(f"백업 실패 (계속 진행): {e}")
 
+                original_output = task.output_file
+                self._set_stage("출력 경로 확인")
+                if self._task_planner.allocate_output_path(
+                    task,
+                    used_path_keys=used_output_path_keys,
+                    overwrite=self.planned_conversion.overwrite,
+                    format_type=self.format_type,
+                ):
+                    warning = f"변환 직전 출력 충돌 감지로 경로 변경: {original_output} -> {task.output_file}"
+                    runtime_warnings.append(warning)
+                    logger.warning(warning)
+
                 try:
+                    self._set_stage("출력 폴더 준비")
                     task.output_file.parent.mkdir(parents=True, exist_ok=True)
                 except Exception as e:
                     task.status = "실패"
@@ -144,6 +167,7 @@ class ConversionWorker(QThread):
                     if self.cancel_requested:
                         break
 
+                    self._set_stage("COM 내보내기")
                     success, error = converter.convert_file(
                         task.input_file,
                         task.output_file,
@@ -155,6 +179,7 @@ class ConversionWorker(QThread):
                         break
 
                     if attempt < self.retry_count:
+                        self._set_stage("재시도 대기")
                         task.retry_count += 1
                         self.status_updated.emit(
                             f"재시도 중: {task.input_file.name} ({task.retry_count}/{self.retry_count})"
@@ -203,6 +228,7 @@ class ConversionWorker(QThread):
             )
             self.task_completed.emit(summary)
         finally:
+            self._set_stage("정리")
             if converter is not None:
                 try:
                     converter.cleanup()
@@ -215,6 +241,12 @@ class ConversionWorker(QThread):
                         pythoncom.CoUninitialize()
                     except Exception:
                         pass
+
+    def _set_stage(self, stage: str) -> None:
+        self.current_stage = stage
+        started_at = self._started_at
+        elapsed = time.perf_counter() - started_at if started_at is not None else 0.0
+        self.stage_updated.emit(stage, elapsed)
 
     def force_terminate(self) -> bool:
         """앱이 소유한 한글 프로세스만 강제 종료."""

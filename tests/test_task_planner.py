@@ -192,6 +192,23 @@ def test_resolve_output_conflicts_allows_existing_overwrite_but_renames_batch_du
     assert tasks[1].conflict_original_output_file == existing
 
 
+def test_allocate_output_path_renames_late_auxiliary_conflict(tmp_path: Path) -> None:
+    planner = TaskPlanner()
+    task = ConversionTask(input_file=tmp_path / "source.hwp", output_file=tmp_path / "doc.png")
+    (tmp_path / "doc_001.png").write_bytes(b"old")
+
+    changed = planner.allocate_output_path(
+        task,
+        used_path_keys=set(),
+        overwrite=False,
+        format_type="PNG",
+    )
+
+    assert changed is True
+    assert task.output_file == tmp_path / "doc (1).png"
+    assert task.conflict_original_output_file == tmp_path / "doc.png"
+
+
 def test_resolve_output_conflicts_renames_existing_auxiliary_artifact(tmp_path: Path) -> None:
     planner = TaskPlanner()
     existing_aux = tmp_path / "doc_001.png"

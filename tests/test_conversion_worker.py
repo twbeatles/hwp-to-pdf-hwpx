@@ -386,3 +386,59 @@ def test_create_backup_prunes_old_stem_files(tmp_path: Path, monkeypatch) -> Non
     assert path.exists()
     remaining = list(backup_dir.glob("doc_*.hwp"))
     assert len(remaining) <= 3
+
+
+def test_conversion_worker_renames_output_when_late_conflict_appears(tmp_path: Path) -> None:
+    source = tmp_path / "source.hwp"
+    source.write_text("x", encoding="utf-8")
+    original = tmp_path / "out.pdf"
+    original.write_bytes(b"external output")
+    task = ConversionTask(source, original)
+    plan = PlannedConversion(
+        format_type="PDF",
+        same_location=True,
+        output_path="",
+        overwrite=False,
+        retry_count=0,
+        tasks=[task],
+    )
+    converted_outputs: list[Path] = []
+
+    class OutputRecordingConverter(StubConverter):
+        def convert_file(self, input_path, output_path, format_type="PDF", *, cancel_check=None):
+            del input_path, format_type, cancel_check
+            converted_outputs.append(Path(output_path))
+            Path(output_path).write_bytes(b"%PDF-1.4\n")
+            return True, None
+
+    worker = ConversionWorker(
+        plan,
+        converter_factory=lambda: OutputRecordingConverter(results={}),
+    )
+    worker.run()
+
+    assert converted_outputs == [tmp_path / "out (1).pdf"]
+    assert original.read_bytes() == b"external output"
+    assert task.conflict_original_output_file == original
+
+
+def test_conversion_worker_emits_com_export_stage(tmp_path: Path) -> None:
+    source = tmp_path / "a.hwp"
+    source.write_text("x", encoding="utf-8")
+    plan = PlannedConversion(
+        format_type="PDF",
+        same_location=True,
+        output_path="",
+        retry_count=0,
+        tasks=[ConversionTask(source, tmp_path / "a.pdf")],
+    )
+    worker = ConversionWorker(
+        plan,
+        converter_factory=lambda: StubConverter(results={"a.hwp": (True, None)}),
+    )
+    stages: list[str] = []
+    worker.stage_updated.connect(lambda stage, _: stages.append(stage))
+
+    worker.run()
+
+    assert "COM 내보내기" in stages
