@@ -1,0 +1,10 @@
+{
+  "payload": {
+    "artifact_url": "https://github.com/twbeatles/HwpMate/releases/download/v9.1.0/HwpMate-v9.1.0.exe",
+    "expires_at": "2027-08-16T14:23:34Z",
+    "sha256": "069c5d8b0c4852f1a8d631de89c5f06f7de570421ccb53cdb26ce25ed17251d0",
+    "size": 45745176,
+    "version": "9.1.0"
+  },
+  "signature": "bqY7NlWSHBfJ8+h1romTgUggHMqUt0+HPEVWhmdgZ3c19+1jO7Pqzrvtxn6+YPTmP7NdjGF6NtHHj/AxEjzFAQ=="
+}
