@@ -6,6 +6,7 @@ from .file_selection import FileSelectionController
 from .lifecycle import LifecycleController
 from .native_drop import NativeDropController
 from .state import MainWindowState
+from .update import UpdateController
 
 __all__ = [
     "AppearanceController",
@@ -14,4 +15,6 @@ __all__ = [
     "LifecycleController",
     "MainWindowState",
     "NativeDropController",
+    "UpdateController",
 ]
+

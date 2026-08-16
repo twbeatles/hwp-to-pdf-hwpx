@@ -7,8 +7,9 @@ from typing import Callable, Optional, Protocol
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from ...logging_config import get_logger
-from ...constants import MAX_RETRY_COUNT, RETRY_DELAY_SECONDS
+from ...constants import CONVERTER_RECYCLE_BATCH_COUNT, MAX_RETRY_COUNT, RETRY_DELAY_SECONDS
 from ...models import ConversionSummary, ConversionTask, PlannedConversion
+
 from ...services.hwp_converter import HWPConverter, pythoncom
 from ...services.hwp_print_settings import normalize_pdf_export_mode
 from ...services.task_planner import TaskPlanner
@@ -200,7 +201,26 @@ class ConversionWorker(QThread):
 
                 self.progress_updated.emit(idx + 1, total, task.input_file.name)
 
+                # 대량 변환 시 한글 프로세스 메모리/GDI 누수 방지를 위한 주기적 재순환
+                if (
+                    (idx + 1) % CONVERTER_RECYCLE_BATCH_COUNT == 0
+                    and (idx + 1) < total
+                    and not self.cancel_requested
+                ):
+                    self.status_updated.emit("대량 변환 최적화: 한글 프로세스 재순환 중...")
+                    try:
+                        converter.cleanup()
+                        converter.initialize(manage_com_apartment=False)
+                        if hasattr(converter, "pdf_export_mode"):
+                            converter.pdf_export_mode = normalize_pdf_export_mode(
+                                getattr(self.planned_conversion, "pdf_export_mode", None)
+                            )
+                        self._emit_engine_status(converter)
+                    except Exception as recycle_exc:
+                        logger.warning(f"한글 프로세스 재순환 중 오류 발생 (계속 진행): {recycle_exc}")
+
             if self.cancel_requested:
+
                 for task in self.tasks:
                     if task.status == "대기":
                         task.status = "취소됨"

@@ -107,3 +107,20 @@ SECURITY_AUTO_CLICK_MAX_PER_SESSION = 40
 SECURITY_MODULE_DLL_SHA256 = (
     "9ac5b97c47ac8aed1e8bca27a3eef39411361d8f68c262509f0c40a8f9d21bb6"
 )
+
+# 자동 업데이트 설정
+UPDATE_MANIFEST_URL_DEFAULT = (
+    "https://raw.githubusercontent.com/twbeatles/HwpMate/main/updates/latest.json"
+)
+UPDATE_PUBLIC_KEY_B64_DEFAULT = (
+    "wrW1ov1NJbUeBjOKIyYNHa+AnjvHdCwSrxIRaQio2ac="
+)
+UPDATE_MANIFEST_MAX_BYTES = 1024 * 1024  # 1MB
+UPDATE_ARTIFACT_MAX_BYTES = 250 * 1024 * 1024  # 250MB
+UPDATE_REQUEST_TIMEOUT_SECONDS = 30.0
+UPDATE_BACKUP_KEEP_COUNT = 3
+
+# 대량 변환 시 한글 COM 프로세스 자동 재순환 주기 (N건마다 cleanup & re-init)
+CONVERTER_RECYCLE_BATCH_COUNT = 200
+
+

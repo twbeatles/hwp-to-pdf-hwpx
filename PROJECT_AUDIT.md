@@ -1,117 +1,174 @@
-# Project Audit
-
-감사일: 2026-08-10
-범위: 기능 구현, 오류 처리, 상태·비동기 흐름, 경로/설정/보안, 테스트 및 문서 정합성
+﻿# Project Audit
 
 ## 1. Executive Summary
 
-전체 위험도는 **Medium**이다. 정적 검증은 양호하다(`python -m pytest -q`: **143 passed**, `python -m pyright .`: **0 errors / 0 warnings**). 또한 단일 인스턴스 잠금, COM 워커 분리, 출력 산출물 검증, 설정 원자 저장, DLL SHA-256 검증 등 주요 안정성 장치가 구현되어 있다.
+HwpMate(HWP 변환기)는 한컴오피스 한글 COM 자동화(Automation)를 기반으로 HWP/HWPX 문서를 다양한 포맷(PDF, DOCX, 이미지 등)으로 일괄 변환하는 PyQt6 기반 데스크톱 애플리케이션입니다.
 
-다만 "덮어쓰기 끔"의 출력 충돌 방어가 사전 점검 단계에만 있어, 점검과 실제 COM 저장 사이에 외부 프로세스가 파일을 만들면 기존 파일을 덮어쓸 수 있다. 실패한 비-PDF 내보내기의 부분 산출물도 정리하지 않는다. 또한 COM 호출 자체가 멈추는 경우, 앱이 띄우지 않은 한글 프로세스에는 강제 종료 경로가 없어서 취소가 무기한 대기가 될 수 있다. 폴더 스캔 캐시도 짧은 유효기간과 표본 검사만 사용하므로, 하위 폴더의 직전 변경을 놓칠 수 있다.
+최근 진행된 **Ed25519 보안 서명 기반 GitHub Releases 자동 업데이트 시스템** 도입을 포함하여, 전체 코드베이스의 아키텍처, 안정성, 예외 처리, 동시성, COM 프로세스 수명 주기, OS 호환성을 종합적으로 감사했습니다.
+
+### 📊 전체 평가 및 위험도 요약
+* **전체 위험도**: **Low ~ Medium (안정적)**
+* **핵심 강점**:
+  - **견고한 COM 프로세스 제어**: _snapshot_hwp_pids()와 Toolhelp API를 통해 앱이 직접 생성한 한글 프로세스(owned_pids)만 선별 추적하여, 사용자의 기존 한글 창을 간섭하지 않고 안전하게 강제 종료/전면화/숨김을 수행합니다.
+  - **강력한 무결성 검증 업데이트 시스템**: Ed25519 비대칭 암호화 서명, SHA-256 해시, 크기 검증, HTTPS 강제, 그리고 교체 후 --smoke 검증 실패 시 자동 롤백 복구 메커니즘이 구현되어 있습니다.
+  - **SOLID 기반 모듈화**: MainWindow의 비대화를 방지하고 컨트롤러(conversion, ile_selection, lifecycle, ppearance, update)와 서비스 계층으로 분리되어 있습니다.
+* **주요 개선 필요 영역**:
+  - 대용량 업데이트 다운로드 시 취소 플래그 미반영 및 소켓 읽기 무한 대기 방지.
+  - 대량(수백~수천 건) 일괄 변환 시 한글 COM 인스턴스 장기 유지로 인한 잠재적 메모리/핸들 누수 완화(배치 리셋).
+  - README.md의 릴리즈 아티팩트 명명 규칙 일치화 및 신규 업데이트 기능 설명 보강.
+
+---
 
 ## 2. Project Understanding
 
-README와 CLAUDE.md 기준으로 HwpMate는 Windows 10/11에서 한글(HWP/HWPX) 문서를 PDF, 문서, 이미지 형식으로 일괄 변환하는 PyQt6 GUI 앱이다. 배포 진입점은 `hwptopdf-hwpx_v4.py`이고, 이는 `hwpmate.bootstrap.main`을 거쳐 `hwpmate.app.main`을 호출한다. 실행 전 pywin32와 관리자 권한을 확인하고, `SingleInstanceLock`으로 중복 실행을 막은 뒤 `MainWindow`를 연다.
+### 2.1 아키텍처 및 데이터 흐름
 
-CodeGraph 호출 관계 분석 결과, 핵심 실행 흐름은 다음과 같다.
+`mermaid
+flowchart TD
+    subgraph UI_Layer["UI 계층 (PyQt6)"]
+        MW["MainWindow (Composition Root)"]
+        Builder["main_window_ui.builder"]
+        MW --> Builder
+        MW --> Controllers["Controllers (Conversion, FileSelection, Lifecycle, Appearance, Update)"]
+        MW --> Toast["ToastManager (알림 토스트)"]
+    end
 
-```text
-MainWindow UI
-  -> ConversionController.start_conversion
-  -> folder scan cache 확인 / TaskPlanner.build_tasks
-  -> TaskPlanner.resolve_output_conflicts
-  -> PreflightDialog 승인
-  -> ConversionWorker(QThread).run
-  -> HWPConverter.initialize / convert_file
-  -> ConversionSummary signal
-  -> ResultDialog 및 상태 초기화
-```
+    subgraph Service_Layer["서비스 & 도메인 계층"]
+        TaskPlanner["TaskPlanner (작업 계획 및 충돌 해결)"]
+        FileStore["FileSelectionStore (선택 파일 관리)"]
+        SecModule["HwpSecurityModule & Session (보안 DLL 등록 & 팝업 억제)"]
+        UpManifest["update_manifest (Ed25519 서명 & 메타데이터 검증)"]
+        UpInstaller["update_installer (스트리밍 다운로드 & 원자적 교체 & 롤백)"]
+    end
 
-`TaskPlanner`는 동일 확장자 입력을 건너뛰고 출력 경로·보조 산출물 충돌을 계산한다. `ConversionWorker`는 별도 QThread에서 COM apartment를 초기화하고, 파일별 백업·디렉터리 생성·재시도·취소 상태·요약 스냅샷을 처리한다. `HWPConverter`는 SaveAs/PrintToPDFEx 폴백, PDF 매직 검증, 보안 모듈 설치 및 소유 PID 기반 강제 종료를 제공한다.
+    subgraph Worker_Layer["백그라운드 워커 계층 (QThread)"]
+        ConvWorker["ConversionWorker (COM STA 스레드 격리)"]
+        ScanWorker["FileScanWorker (비동기 디렉터리 탐색)"]
+        UpWorker["UpdateCheck & Download Worker"]
+    end
 
-CodeGraph상 영향 범위가 특히 큰 지점은 `ConversionWorker`(15 callers), `PlannedConversion`(25 callers), `TaskPlanner.build_tasks`/`resolve_output_conflicts`, `ConversionController.start_conversion`이다. 이들은 수정 시 UI, 결과 대화상자 및 단위 테스트까지 함께 회귀 검증해야 한다.
+    subgraph COM_Engine["외부 연동 (Windows COM)"]
+        HWP_COM["한컴오피스 한글 (HwpObject / HwpCtrl)"]
+    end
 
-README.md와 CLAUDE.md 파일 자체는 UTF-8 바이트로 저장되어 있다. 콘솔에서 한글이 깨져 보일 수 있으나, 이는 현재 PowerShell 출력 코드페이지의 표현 문제이며 파일 인코딩 손상 근거는 아니다.
+    Controllers --> TaskPlanner
+    Controllers --> ConvWorker
+    Controllers --> UpWorker
+    ConvWorker --> HWP_COM
+    UpWorker --> UpManifest
+    UpWorker --> UpInstaller
+`
+
+### 2.2 핵심 실행 흐름
+1. **부트스트랩 (hwpmate/app.py, ootstrap.py)**:
+   - --smoke 인자 확인 시 GUI 없이 의존성 및 무결성을 검증하고 JSON을 출력하여 즉시 종료.
+   - --apply-update 인자 확인 시 업데이트 헬퍼 모드로 부모 PID 종료 대기 후 바이너리 원자적 교체 실행.
+   - 일반 실행 시 단일 인스턴스 뮤텍스(SingleInstanceLock) 및 관리자 권한(is_admin()) 검증 후 MainWindow 기동.
+2. **시작 후 생명주기**:
+   - showEvent에서 이전 업데이트 결과(last-update-result.json)를 소비하여 성공/롤백 토스트 알림.
+   - 3초 후 백그라운드 스레드로 GitHub Releases 매니페스트(updates/latest.json) 확인.
+3. **변환 파이프라인**:
+   - 사용자 파일/폴더 선택 ➔ TaskPlanner가 대상 목록 및 출력 경로 충돌 조정 ➔ PreflightDialog로 사전 검증 ➔ ConversionWorker가 별도 COM STA 스레드에서 한글 COM 인스턴스를 제어하며 순차 변환.
+
+---
 
 ## 3. High-Risk Issues
 
-### A-01. 출력 충돌 검사가 저장 직전 재검증되지 않아 덮어쓰기 금지 정책이 우회될 수 있음
+### [Issue 1] 업데이트 다운로드 스레드에서 사용자 취소 미반영 및 읽기 타임아웃 처리
+* **위치**: hwpmate/ui/main_window_controllers/update.py (UpdateDownloadWorker.run), hwpmate/services/update_installer.py (stream_update_artifact)
+* **문제**:
+  1. UpdateDownloadWorker에 self._is_cancelled = False가 정의되어 있으나, un() 메서드의 다운로드 청크 반복 루프에서 이 플래그를 확인하거나 취소하는 인터럽트 로직이 누락되어 있습니다. 사용자가 대화상자를 닫아도 백그라운드에서 다운로드가 끝까지 진행됩니다.
+  2. stream_update_artifact에서 urlopen(request, timeout=...)의 타임아웃은 최초 연결/첫 바이트에 적용되며, 루프 내부의 esponse.read(1024 * 1024) 도중 네트워크 단절 시 소켓 읽기가 장시간 블로킹될 수 있습니다.
+* **영향**:
+  - 사용자가 업데이트 대화상자를 닫거나 취소해도 백그라운드 네트워크 트래픽과 디스크 I/O가 지속됨.
+  - 네트워크 단절 시 다운로드 스레드가 멈추어 UI가 락업되거나 상태가 갱신되지 않음.
+* **근거**:
+  - UpdateDownloadWorker의 self._is_cancelled 변수가 선언만 되고 prepare_staged_update 호출 시 전달되지 않음.
+* **권장 수정 방향**:
+  - prepare_staged_update 및 stream_update_artifact에 cancel_check: Callable[[], bool] 콜백 인자를 추가하여 청크 읽기 루프마다 취소 여부를 검사하고 즉시 중단하도록 개선.
+* **우선순위**: **Medium**
 
-* 위치: `hwpmate/services/task_planner.py:187` `TaskPlanner.resolve_output_conflicts`, `hwpmate/ui/main_window_controllers/conversion/controller.py:409-445`, `hwpmate/workers/conversion_worker/worker.py:125-152`
-* 문제: `overwrite=False`일 때 기존 산출물 충돌은 계획/사전점검 시 한 번만 검사한다. 워커는 실제 저장 직전에 대상 또는 보조 산출물의 존재를 다시 검사하지 않고 `converter.convert_file()`을 호출한다.
-* 영향: 사전점검 승인 후 다른 프로세스·사용자·동기화 프로그램이 같은 출력 파일을 생성하면, 한글 COM의 SaveAs 동작에 따라 사용자가 "덮어쓰기"를 선택하지 않았어도 외부 산출물을 덮어쓸 수 있다. 이미지/HTML 보조 산출물도 같은 경쟁 조건에 놓인다.
-* 근거: 충돌 판단은 `resolve_output_conflicts()`의 `existing_conflict`에서만 수행된다. 워커의 파일별 처리에는 출력 폴더 생성 뒤 입력 파일 존재 확인과 `convert_file()` 호출만 있으며 충돌 재확인이 없다.
-* 권장 수정 방향: 워커에서 각 작업의 저장 직전에 원자적으로 가능한 예약/재검증을 수행한다. 충돌 발견 시 새 이름을 재계산하거나 해당 작업을 실패/건너뜀 처리한다. 보조 산출물 포맷은 `existing_artifact_conflicts()`를 같은 정책으로 재사용하고, 재조정 결과를 요약/CSV/JSON에 기록한다.
-* 우선순위: High
+---
 
-### A-02. 실패한 비-PDF 내보내기가 부분 산출물을 남길 수 있음
+### [Issue 2] 대량 파일 변환 시 한글 COM 프로세스 장기 유지로 인한 자원 누수 가능성
+* **위치**: hwpmate/workers/conversion_worker/worker.py (ConversionWorker.run)
+* **문제**:
+  - 단일 변환 작업에서 수백~수천 개의 파일을 연속 변환할 때, 단 하나의 한글 COM 인스턴스(HwpObject)를 계속 재사용합니다.
+  - 한글 프로그램의 COM 엔진 특성상, 대량의 문서 열기/닫기(Open/Clear)가 반복되면 프로세스 내부 GDI 핸들 또는 메모리가 점진적으로 증가하여 일정 건수 이후 크래시나 속도 저하가 발생할 수 있습니다.
+* **영향**:
+  - 1,000건 이상의 대규모 배치 변환 작업 후반부에 한글 COM 오류 또는 응답 없음 발생 위험.
+* **근거**:
+  - ConversionWorker.run()의 or idx, task in enumerate(self.tasks): 루프에서 한글 COM 프로세스를 재생성하거나 재시작하는 배치 주기(예: 매 200~300건마다 재시작)가 없음.
+* **권장 수정 방향**:
+  - (추정/개선) N건(예: 200건)마다 converter.cleanup() 후 converter.initialize()를 호출하는 자동 재순환(Recycle) 옵션을 추가하거나 예외 발생 시 인스턴스 재초기화 로직 보강.
+* **우선순위**: **Medium**
 
-* 위치: `hwpmate/services/hwp_converter/converter.py:428-475` `HWPConverter.convert_file`
-* 문제: SaveAs가 실패를 반환하거나, 산출물 스냅샷 검증이 실패한 경우 PDF 경로만 `remove_incomplete_output()`으로 불완전 파일을 정리한다. DOCX/HWPX/이미지/HTML 경로는 `Clear()` 후 실패를 반환하지만, 이번 호출이 만들거나 변경한 파일·보조 산출물을 되돌리지 않는다.
-* 영향: UI와 결과 보고서에는 실패로 표시되지만 출력 폴더에는 열리지 않거나 불완전한 파일/보조 디렉터리가 남을 수 있다. 이후 실행에서 충돌로 간주되어 이름이 바뀌거나 사용자가 잘못된 결과물을 사용할 수 있다.
-* 근거: `_artifact_ok()` 실패 후 PDF에만 폴백 및 불완전 PDF 제거가 있으며, 비-PDF는 475행 부근에서 실패 반환한다. 일반 실패 분기(428-435)도 출력 정리를 수행하지 않는다.
-* 권장 수정 방향: 변환 전 산출물 스냅샷을 바탕으로, 이번 시도에서 새로 생성된 파일과 보조 산출물을 best-effort로 제거한다. 기존 파일을 덮어쓴 경우에는 무조건 삭제하지 말고 사전 백업/임시 경로 저장 후 원복 가능한 트랜잭션 정책을 둔다.
-* 우선순위: High
+---
 
-### A-03. COM 호출이 무응답이면 취소가 완료되지 않을 수 있음
+### [Issue 3] 릴리즈 워크플로우 아티팩트 명명과 README.md 상의 파일명 불일치
+* **위치**: .github/workflows/release.yml, hwp_converter.spec, README.md
+* **문제**:
+  - hwp_converter.spec에서는 출력 이름을 
+ame='HWP변환기_v9.0'으로 생성합니다.
+  - .github/workflows/release.yml에서는 $artifact = Join-Path C:\twbeatles-repos\HwpMate "dist/HwpMate-v.exe"로 이름을 변경하여 GitHub Release에 업로드합니다.
+  - README.md 가이드에는 HWP변환기_v9.0.exe로 표기되어 있어 사용자가 다운로드한 파일명(HwpMate-v9.0.exe)과 불일치가 발생합니다.
+* **영향**:
+  - 사용자가 다운로드한 실행 파일명과 안내 문서의 파일명이 달라 혼선 발생 가능.
+* **근거**:
+  - elease.yml 57행: dist/HwpMate-v.exe
+  - README.md 62행: HWP변환기_v9.0.exe
+* **권장 수정 방향**:
+  - 프로젝트 공식 배포 파일명을 HwpMate-v{version}.exe로 통일하고 README.md의 예시 파일명을 수정.
+* **우선순위**: **Low**
 
-* 위치: `hwpmate/workers/conversion_worker/worker.py:147-162`, `hwpmate/ui/main_window_controllers/conversion/controller.py:482-555`
-* 문제: 취소 플래그는 `convert_file()` 호출 전후와 재시도 대기에서만 확인된다. `Open`, `SaveAs`, `PrintToPDFEx` 같은 동기 COM 호출 중에는 인터럽트할 수 없다. 제한 시간 후 강제 종료는 앱이 새로 띄운 것으로 추적한 PID가 있을 때만 가능하다.
-* 영향: 이미 실행 중이던 한글 인스턴스에 연결했거나 PID 스냅샷을 만들지 못한 상태에서 COM이 모달 창/무응답으로 정지하면, 사용자는 취소 후에도 워커 종료를 기다려야 한다. 창 닫기와 후속 작업도 지연될 수 있다.
-* 근거: `request_worker_stop()`은 `worker.wait()`를 반복한 뒤 `worker.can_force_terminate()`가 false면 강제 종료하지 않고 대기 상태를 유지한다. CLAUDE.md도 이 제약을 명시하고 있으므로 문서와 구현은 일치하지만, 가용성 위험은 남는다.
-* 권장 수정 방향: COM 호출별 진행 단계·경과 시간·사용자 안내를 더 명확히 기록하고, 별도의 watchdog/복구 절차를 설계한다. 안전한 소유성 확인을 전제로만 강제 종료를 제공한다는 현재 보안 원칙은 유지한다.
-* 우선순위: Medium
-
-### A-04. 폴더 변환의 캐시 신선도 검사가 하위 변경을 완전하게 보장하지 않음
-
-* 위치: `hwpmate/ui/main_window_controllers/file_selection/controller.py:55-103`, `326` 이후 `validate_folder_scan_cache_freshness`, `hwpmate/ui/main_window_controllers/conversion/controller.py:164-212`
-* 문제: 폴더 모드는 UI 스레드 재스캔을 피하기 위해 최대 90초 캐시와 루트 폴더 mtime, 일부 파일 존재 표본으로 입력 목록을 확정한다. 하위 폴더의 새 파일 추가는 루트 mtime에 반영되지 않을 수 있고, 표본에 걸리지 않으면 캐시가 유효하다고 판단한다.
-* 영향: 사용자가 "변환 시작" 직전에 하위 폴더에 넣은 HWP/HWPX가 이번 일괄 변환에서 누락될 수 있다. 특히 대규모 트리와 동기화 폴더에서 재현 가능성이 높다.
-* 근거: 코드 주석도 디렉터리 mtime과 표본 파일 존재 검사가 best-effort임을 명시한다. `collect_tasks()`는 캐시가 유효하면 직접 파일 순회를 하지 않는다.
-* 권장 수정 방향: 변환 시점의 재스캔 옵션(정확성 우선)을 제공하거나, 스캔 결과에 디렉터리별 mtime/파일 수 서명을 저장해 변경된 하위 트리만 증분 재스캔한다. 기본 동작을 유지할 경우 UI에 캐시 기준 시각과 "최신화 후 변환"을 명확히 표시한다.
-* 우선순위: Medium
-
-### A-05. README의 로그 기본 위치 설명이 실제 우선순위와 다름
-
-* 위치: `README.md` 설정/로그 표, `hwpmate/logging_config.py:13-20`
-* 문제: README는 로그 위치를 `%LOCALAPPDATA%\\HwpMate\\logs` 또는 `~/.hwp_converter/logs`로 설명한다. 실제 `_log_dir_candidates()`는 홈 디렉터리의 `~/.hwp_converter/logs`를 먼저 선택하고, 그것이 불가능할 때만 `%LOCALAPPDATA%`를 선택한다.
-* 영향: Windows 사용자가 안내된 위치에서 로그를 찾지 못해 장애 보고와 현장 진단이 지연될 수 있다.
-* 근거: 코드의 후보 순서가 문서의 기본 위치 표현과 반대다.
-* 권장 수정 방향: README에 실제 우선순위와 임시 폴더 폴백을 명시하거나, Windows 우선 정책이 의도라면 코드 후보 순서를 변경한다.
-* 우선순위: Low
+---
 
 ## 4. Potential Functional Gaps
 
-* **추정:** 실제 한글 COM을 사용하는 자동화 회귀 테스트가 없다. 현재 `tests/test_hwp_converter.py`는 모의 COM 객체 중심이고, 프로젝트도 별도 수동 `tools/hwp_com_smoke.py` 및 체크리스트를 제공한다. 한글 버전·프린터·보안 모듈·UAC 조합 차이는 CI에서 검증되지 않는다.
-* **추정:** 네트워크 드라이브, OneDrive/동기화 폴더, 긴 UNC 경로에서의 출력 충돌·원자 저장·백업 보존을 종단 간 검증할 시나리오가 부족하다. 경로 후보와 긴 경로 경고는 구현되어 있으나 실제 HWP COM 호환성은 환경 의존적이다.
-* **추정:** 실패 후 남은 다중 이미지/HTML 보조 산출물을 결과 화면에서 정리하거나 사용자가 열어 볼 수 없도록 식별하는 기능이 필요할 수 있다.
-* **추정:** 출력 파일을 외부 변경으로부터 완전히 보호하려면 "새 이름으로 저장"뿐 아니라 작업별 임시 출력 위치와 완료 후 이동하는 정책이 필요할 수 있다. 이는 A-01/A-02 해결 방식에 따라 결정해야 한다.
+> 아래 항목은 기능의 완성도와 사용자 편의성을 높이기 위한 보완 지점이며, 확실하지 않은 내용은 **[추정]**으로 명시합니다.
+
+1. **[추정] 업데이트 확인 실패 시 상세 재시도 정책**:
+   - 현재 오프라인 상태이거나 방화벽 환경에서 앱 기동 시 조용히 1회 확인하고 종료됩니다. 수동 확인 버튼을 누르지 않는 한 다음 실행 시점까지 재확인이 이루어지지 않습니다. (주기적 폴링 타이머 또는 네트워크 복구 감지 기능 없음).
+2. **[추정] CLI 일괄 변환 모드 부재**:
+   - 현재 GUI 실행 및 --smoke, --apply-update CLI는 지원하지만, 터미널 환경에서 스크립트나 배치 파일로 직접 변환을 수행하는 CLI 인자(예: HwpMate.exe --input "C:\docs" --format PDF --output "C:\out")는 제공되지 않습니다.
+3. **[추정] 한글 암호화 문서 감지 및 알림**:
+   - 암호가 걸려 있는 HWP 문서의 경우 orceopen:true 옵션으로도 열리지 않고 대기 상태에 빠질 수 있습니다. 사전 점검(Preflight) 또는 변환 시 암호 걸린 문서를 감지하여 명확한 오류 메시지("문서 암호 설정됨")를 남기는 처리가 보강되면 유용합니다.
+4. **[추정] 릴리즈 노트 표시 UI의 서치/마크다운 렌더링**:
+   - 현재 업데이트 대화상자에서 릴리즈 노트 클릭 시 기본 웹 브라우저를 통해 GitHub Release 페이지로 이동합니다. 대화상자 내에 텍스트 요약을 직접 표시하는 인라인 뷰어가 있으면 더욱 편리합니다.
+
+---
 
 ## 5. Recommended Fix Plan
 
-### 1단계: 즉시 수정
+### 1단계: 즉시 개선 (Stability & Polish)
+1. **업데이트 다운로드 취소 및 스트리밍 안전성 보강**:
+   - UpdateDownloadWorker 및 prepare_staged_update에 cancel_check 콜백을 연동하여 대화상자 취소 시 즉시 다운로드 루프를 탈출하고 임시 파일을 정리하도록 개선.
+2. **문서 및 파일명 정합성 일치화**:
+   - README.md에 HwpMate-v{version}.exe 명칭 반영 및 신규 자동 업데이트 기능 안내 섹션 추가.
 
-1. 워커의 실제 저장 직전에 `overwrite=False` 충돌을 재검사하고, 충돌 시 새 이름 재계산 또는 안전한 실패 처리를 추가한다.
-2. 내보내기 실패·산출물 검증 실패 시 이번 시도가 만든 비-PDF 주/보조 산출물을 정리한다. 기존 파일 덮어쓰기 경로는 임시 파일/원복 정책을 먼저 정한다.
-3. 위 두 경로의 결과를 `ConversionTask`와 CSV/JSON 감사 필드에 명확히 남긴다.
+### 2단계: 대규모 변환 안정성 개선 (Scalability)
+1. **대량 변환 COM 인스턴스 자동 재순환**:
+   - 연속 변환 200건 초과 시 한글 COM 인스턴스를 재초기화하는 안전 가드 옵션 추가.
+2. **암호 걸린 문서 타임아웃 가드 보강**:
+   - Open 시도 후 응답이 없을 때 취소 핸들러와 연동하여 신속히 실패로 전환.
 
-### 2단계: 안정성 개선
+### 3단계: 구조 및 편의 기능 개선 (Feature Enhancements)
+1. **헤드리스 CLI 변환 인자 지원**:
+   - --input, --format, --output 플래그를 통한 자동화 스크립트 연동 지원.
+2. **인라인 릴리즈 노트 뷰어**:
+   - 업데이트 대화상자 내에 릴리즈 요약 마크다운 렌더링 추가.
 
-1. 폴더 변환에서 "최신 스캔 후 실행" 선택지 또는 변경 하위 트리 증분 재스캔을 추가한다.
-2. COM 대기 상태에 단계별 timeout telemetry, 상태 표시, 수동 복구 안내를 추가한다.
-3. README의 로그 위치 우선순위와 실제 폴백 위치를 동기화한다.
-
-### 3단계: 구조 개선
-
-1. 출력 정책을 `TaskPlanner`와 `ConversionWorker`가 공유하는 단일 예약/커밋 서비스로 분리해 TOCTOU 판단을 한곳에서 관리한다.
-2. 다중 산출물 형식을 위한 임시 디렉터리 생성 → 검증 → 원자적 publish/rollback 흐름을 도입한다.
-3. 실제 한글이 설치된 Windows 테스트 환경에서 smoke test를 정기 실행하는 배포 검증 단계를 마련한다.
+---
 
 ## 6. Test Recommendations
 
-1. `overwrite=False` 계획 완료 뒤 대상 파일 또는 PNG/HTML 보조 산출물을 생성하고, 워커가 저장 직전 재검사하여 덮어쓰지 않는지 테스트한다.
-2. 모의 COM이 SaveAs 후 빈 DOCX, 부분 PNG, `.files` 보조 디렉터리를 만든 뒤 실패하도록 하여, 새 산출물이 정리되고 기존 산출물은 보존되는지 테스트한다.
-3. 폴더 미리보기 완료 후 하위 폴더에 파일을 추가·삭제·교체하는 테스트를 추가해 캐시 정책(재스캔 요구 또는 증분 반영)을 명시적으로 고정한다.
-4. `Open` 또는 `SaveAs`가 장시간 반환하지 않는 모의 COM으로 취소 UI 상태, timeout 안내, 소유 PID 없음/있음 분기를 검증한다.
-5. Windows 통합 테스트에서 UNC, 240자 경고 경계, 260자 차단 경계, OneDrive 또는 잠긴 출력 파일을 포함한다.
-6. 실제 한글 설치 Windows runner에서 PDF·DOCX·PNG·HTML 각각 1건 이상을 변환하고, PDF 매직, 주/보조 산출물, 백업, CSV/JSON 감사 필드를 확인하는 nightly smoke test를 실행한다.
+현재 168개의 단위/통합 테스트가 통과하고 있으나, 다음 시나리오에 대한 테스트 보강을 권장합니다:
+
+1. **UpdateDownloadWorker 취소 테스트**:
+   - 대용량 파일 다운로드 중 취소 시그널/플래그가 설정되었을 때 스테이징 파일이 즉시 삭제되고 download_failed 또는 정상 중단되는지 검증.
+2. **네트워크 단절 및 만료된 URL 에러 핸들링 테스트**:
+   - 404, 500, 타임아웃, DNS 오류 등 다양한 HTTP 예외 상황에서 UpdateController가 충돌 없이 안전하게 오류 토스트를 띄우는지 검증.
+3. **TaskPlanner 대규모 경로(1,000건 이상) 충돌 해결 성능 테스트**:
+   - 동일 폴더 내 중복 파일명이 다수 존재할 때 esolve_output_conflicts의 처리 속도 및 메모리 사용량 벤치마크.
+4. **한글 COM 비정상 종료 시 복구 테스트**:
+   - 변환 도중 한글 프로세스가 예기치 않게 종료(Crash)되었을 때 워커가 무한 대기하지 않고 다음 재시도 또는 실패로 안전하게 넘어가는지 Mock 기반 검증.

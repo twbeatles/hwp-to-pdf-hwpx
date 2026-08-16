@@ -24,6 +24,7 @@ from ..widgets import DropArea, FormatCard
 @dataclass
 class MainWindowWidgets:
     theme_btn: QPushButton
+    update_btn: QPushButton
     folder_radio: QRadioButton
     files_radio: QRadioButton
     folder_widget: QWidget
@@ -57,6 +58,7 @@ class MainWindowWidgets:
 @dataclass(frozen=True)
 class MainWindowCallbacks:
     toggle_theme: Callable[..., None]
+    check_updates: Callable[..., None]
     update_mode_ui: Callable[..., None]
     select_folder: Callable[..., None]
     include_sub_toggled: Callable[..., None]
@@ -70,3 +72,4 @@ class MainWindowCallbacks:
     start_conversion: Callable[..., None]
     cancel_conversion: Callable[..., None]
     update_format_cards: Callable[..., None]
+

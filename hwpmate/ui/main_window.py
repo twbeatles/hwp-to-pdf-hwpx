@@ -41,7 +41,9 @@ from .main_window_controllers import (
     LifecycleController,
     MainWindowState,
     NativeDropController,
+    UpdateController,
 )
+
 from .main_window_ui import MainWindowCallbacks, MainWindowWidgets, build_main_window_ui
 from .toast import ToastManager
 from .widgets import DropArea, FormatCard
@@ -54,6 +56,7 @@ class MainWindow(QMainWindow):
 
     ui: MainWindowWidgets
     theme_btn: QPushButton
+    update_btn: QPushButton
     folder_radio: QRadioButton
     files_radio: QRadioButton
     folder_widget: QWidget
@@ -101,6 +104,8 @@ class MainWindow(QMainWindow):
         self.conversion_controller = ConversionController(self, self.state)
         self.native_drop_controller = NativeDropController(self, self.state)
         self.lifecycle_controller = LifecycleController(self, self.state, save_config)
+        self.update_controller = UpdateController(self)
+
 
         self._init_menu_bar()
         self._init_ui()
@@ -246,6 +251,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.native_drop_controller.initialize_native_drag_drop)
         # 설정에서 복원한 폴더가 있으면 미리보기 스캔 (콜드 UI 재스캔 방지)
         QTimer.singleShot(0, self._maybe_start_restored_folder_scan)
+        # 이전 업데이트 결과 확인 및 백그라운드 업데이트 확인 스케줄링
+        QTimer.singleShot(500, self.update_controller.check_previous_update_result)
+        self.update_controller.schedule_startup_check(3000)
 
     def _maybe_start_restored_folder_scan(self) -> None:
         if not self.folder_radio.isChecked():
@@ -269,6 +277,7 @@ class MainWindow(QMainWindow):
     def _init_ui(self) -> None:
         callbacks = MainWindowCallbacks(
             toggle_theme=self._toggle_theme,
+            check_updates=lambda: self.update_controller.start_check(manual=True),
             update_mode_ui=self._update_mode_ui,
             select_folder=self._select_folder,
             include_sub_toggled=self._on_include_sub_toggled,
@@ -284,6 +293,7 @@ class MainWindow(QMainWindow):
             update_format_cards=self._update_format_cards,
         )
         self.ui = build_main_window_ui(self, self.config, callbacks)
+
 
     def _init_menu_bar(self) -> None:
         self.lifecycle_controller.init_menu_bar()

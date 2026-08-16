@@ -1,0 +1,87 @@
+﻿name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-manifest-publication
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+      HWPMATE_UPDATE_PUBLIC_KEY_B64: ${{ secrets.HWPMATE_UPDATE_PUBLIC_KEY_B64 }}
+      HWPMATE_UPDATE_PRIVATE_KEY_B64: ${{ secrets.HWPMATE_UPDATE_PRIVATE_KEY_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install and verify
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pyright
+          python -m pytest -q
+
+      - name: Build signed-update artifact
+        shell: pwsh
+        run: |
+          if (-not $env:HWPMATE_UPDATE_PUBLIC_KEY_B64) { throw "HWPMATE_UPDATE_PUBLIC_KEY_B64 is required" }
+          if (-not $env:HWPMATE_UPDATE_PRIVATE_KEY_B64) { throw "HWPMATE_UPDATE_PRIVATE_KEY_B64 is required" }
+          python scripts/verify_update_release_key.py
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          if ($version -notmatch '^\d+(\.\d+)*$') { throw "Tag must use vX.Y.Z: $env:GITHUB_REF_NAME" }
+          $configuredVersion = (python -c "from hwpmate.constants import VERSION; print(VERSION)").Trim()
+          if ($configuredVersion -ne $version) { throw "Tag $version does not match hwpmate.constants.VERSION $configuredVersion" }
+          pyinstaller --clean hwp_converter.spec
+          $source = Get-ChildItem dist -Filter '*.exe' | Select-Object -First 1
+          if ($null -eq $source) { throw 'PyInstaller did not create an EXE' }
+          $artifact = Join-Path $PWD "dist/HwpMate-v$version.exe"
+          Copy-Item -LiteralPath $source.FullName -Destination $artifact -Force
+          & $artifact --smoke
+          if ($LASTEXITCODE -ne 0) { throw "Frozen smoke check failed: $LASTEXITCODE" }
+          $artifactUrl = "https://github.com/twbeatles/HwpMate/releases/download/v$version/HwpMate-v$version.exe"
+          python scripts/build_update_manifest.py --version $version --artifact $artifact --artifact-url $artifactUrl --output "$env:RUNNER_TEMP/latest.json"
+          "ARTIFACT=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ARTIFACT }}
+            ${{ runner.temp }}/latest.json
+
+      - name: Publish latest manifest on main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Release tag commit must be contained in main before publishing latest manifest" }
+          git checkout -B main origin/main
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP/latest.json" -Destination updates/latest.json -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates/latest.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "chore: publish update manifest for ${{ github.ref_name }} [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -69,7 +69,6 @@ EXCLUDES = [
     'scipy', 'sklearn', 'tensorflow', 'torch',
     'tkinter', 'tk', 'tcl',
     'IPython', 'jupyter',
-    'cryptography',
     'lib2to3', 'distutils',
 ]
 
@@ -85,6 +84,10 @@ a = Analysis(
         'win32api',
         'pythoncom',
         'pywintypes',
+        # 암호화 및 자동 업데이트 모듈
+        'cryptography',
+        'hwpmate.services.update_manifest',
+        'hwpmate.services.update_installer',
         # 보안 모듈: 변환 경로에서 동적 성격이 있어 onefile 에서 명시 포함
         'hwpmate.services.hwp_security_module',
         'hwpmate.services.hwp_security_session',
@@ -99,7 +102,9 @@ a = Analysis(
         'hwpmate.ui.main_window_controllers.conversion',
         'hwpmate.ui.main_window_controllers.file_selection',
         'hwpmate.ui.main_window_controllers.lifecycle',
+        'hwpmate.ui.main_window_controllers.update',
     ],
+
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

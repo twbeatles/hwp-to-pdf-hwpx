@@ -75,6 +75,14 @@ def build_main_window_ui(window: Any, config: Any, callbacks: MainWindowCallback
 
     header_layout.addStretch()
 
+    # 업데이트 확인 버튼
+    window.update_btn = QPushButton("🔄 업데이트")
+    window.update_btn.setProperty("secondary", True)
+    window.update_btn.setFixedWidth(105)
+    window.update_btn.setToolTip("최신 버전이 있는지 확인합니다")
+    window.update_btn.clicked.connect(callbacks.check_updates)
+    header_layout.addWidget(window.update_btn)
+
     # 테마 전환 버튼
     window.theme_btn = QPushButton("🌙 다크" if window.current_theme == "dark" else "☀️ 라이트")
     window.theme_btn.setProperty("secondary", True)
@@ -84,6 +92,7 @@ def build_main_window_ui(window: Any, config: Any, callbacks: MainWindowCallback
     header_layout.addWidget(window.theme_btn)
 
     main_layout.addLayout(header_layout)
+
 
     # === 모드 선택 ===
     mode_group = QGroupBox("변환 모드")
@@ -477,8 +486,10 @@ def build_main_window_ui(window: Any, config: Any, callbacks: MainWindowCallback
 
     return MainWindowWidgets(
         theme_btn=window.theme_btn,
+        update_btn=window.update_btn,
         folder_radio=window.folder_radio,
         files_radio=window.files_radio,
+
         folder_widget=window.folder_widget,
         folder_entry=window.folder_entry,
         folder_btn=window.folder_btn,

@@ -13,12 +13,15 @@ from .atomic_io import (
 )
 from .preflight import PreflightDialog
 from .result import ResultDialog
+from .update_dialog import UpdateDialog
 
 __all__ = [
     "PreflightDialog",
     "ResultDialog",
+    "UpdateDialog",
     "_write_text_file_atomically",
     "write_failed_list",
     "write_results_csv",
     "write_results_json",
 ]
+

@@ -11,7 +11,23 @@
 - 배포 산출물: `dist/HWP변환기_v9.0.exe`
 - 보안 모듈 번들: `hwpmate/resources/security/FilePathCheckerModuleExample.dll`
 
+## 2026-08-16 자동 업데이트 및 종합 감사 개선 반영 (v9.0)
+
+- **Ed25519 서명 기반 자동 업데이트 파이프라인:**
+  - GitHub Releases `updates/latest.json` 매니페스트 및 Ed25519 비대칭 서명/SHA-256 해시/HTTPS 무결성 검증.
+  - 새 버전 다운로드 시 프로그레스바 및 실시간 취소 지원, 업데이트 후 `--smoke` 검증 실패 시 자동 롤백 복구 지원.
+  - UI 상단 헤더에 `🔄 업데이트` 버튼 및 팝업 안내 다이얼로그 추가.
+- **헤드리스 CLI 일괄 변환 모드 추가:**
+  - GUI 없이 `--input`, `--format`, `--output`, `--recursive`, `--overwrite`, `--no-backup`, `--retry`, `--pdf-export-mode`를 통한 배치 스크립트 변환 지원.
+  - `--smoke` 플래그를 통한 모듈/의존성 무결성 진단 지원.
+- **대량 변환 한글 COM 프로세스 자동 재순환:**
+  - `CONVERTER_RECYCLE_BATCH_COUNT=200`: 연속 변환 200건마다 한글 프로세스를 안전하게 정리 및 재초기화하여 장시간 대량 변환 시 메모리/GDI 핸들 누수 방지.
+- **감사 및 문서 정합성 일치:**
+  - 배포 실행 파일명을 `HwpMate-v9.0.exe`로 표준화하고 README 및 CI/CD 워크플로우 동기화.
+- **검증:** `pytest` 168 passed (100%), `pyright .` 0 errors.
+
 ## 2026-08-05 재감사 잔여 항목 반영
+
 
 - **워커 suppress 전역 금지:** `_suppress_hwp_ui_flash` 는 소유 PID 가 있을 때만 HWND 조작 (`or None` 제거).
 - **변환 직전 폴더 캐시:** `FOLDER_SCAN_CACHE_CONVERT_MAX_AGE_SECONDS=90` — 오래되면 자동 재스캔.
