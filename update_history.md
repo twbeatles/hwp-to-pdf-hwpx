@@ -4,14 +4,15 @@
 
 ## 현재 상태
 
-- 앱 버전: `v9.0`
+- 앱 버전: `v9.1.0`
 - 주 엔트리포인트: `hwptopdf-hwpx_v4.py`
 - 빌드 설정: `hwp_converter.spec`
 - 정적 검사 기준: `pyrightconfig.json`
-- 배포 산출물: `dist/HWP변환기_v9.0.exe`
+- 배포 산출물: `dist/HWP변환기_v9.1.0.exe` (릴리즈: `HwpMate-v9.1.0.exe`)
 - 보안 모듈 번들: `hwpmate/resources/security/FilePathCheckerModuleExample.dll`
 
-## 2026-08-16 자동 업데이트 및 종합 감사 개선 반영 (v9.0)
+## 2026-08-16 자동 업데이트 및 종합 감사 개선 반영 (v9.1.0)
+
 
 - **Ed25519 서명 기반 자동 업데이트 파이프라인:**
   - GitHub Releases `updates/latest.json` 매니페스트 및 Ed25519 비대칭 서명/SHA-256 해시/HTTPS 무결성 검증.

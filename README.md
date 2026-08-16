@@ -59,7 +59,7 @@
 
 ### 1. 프로그램 실행
 
-1. `HwpMate-v9.0.exe`를 **마우스 오른쪽 버튼 → 관리자 권한으로 실행**합니다.  
+1. `HwpMate-v9.1.0.exe`를 **마우스 오른쪽 버튼 → 관리자 권한으로 실행**합니다.  
    (소스 실행: 관리자 PowerShell에서 `python hwptopdf-hwpx_v4.py`)
 2. 관리자 권한 안내가 나오면 확인합니다.
 
@@ -128,13 +128,13 @@ GUI 창 없이 터미널/배치 스크립트에서 직접 변환을 수행할 �
 
 ```bash
 # 단일 파일 변환 (문서 -> PDF)
-HwpMate-v9.0.exe --input "C:\문서\보고서.hwp" --format PDF
+HwpMate-v9.1.0.exe --input "C:\문서\보고서.hwp" --format PDF
 
 # 폴더 일괄 변환 (하위 폴더 포함, Word 형식으로 변환)
-HwpMate-v9.0.exe --input "C:\문서폴더" --format DOCX --recursive --output "C:\변환결과"
+HwpMate-v9.1.0.exe --input "C:\문서폴더" --format DOCX --recursive --output "C:\변환결과"
 
 # 무결성 스모크 검증
-HwpMate-v9.0.exe --smoke
+HwpMate-v9.1.0.exe --smoke
 ```
 
 ---
@@ -174,7 +174,7 @@ HwpMate-v9.0.exe --smoke
 
 ### 배포 실행 파일 (일반 사용자)
 
-- 파일 이름: `HwpMate-v9.0.exe` (단일 파일)
+- 파일 이름: `HwpMate-v9.1.0.exe` (단일 파일)
 - 관리자 권한으로 실행하면 됩니다.
 - 보안 관련 DLL은 exe 안에 포함되어 있으며, 처음 변환할 때 사용자 폴더에 자동으로 설치됩니다.
 
